@@ -191,7 +191,8 @@ static void pixel(u32 *p,unsigned stride,int x,int y,u32 c){
 }
 static void rect(u32 *p,unsigned s,int x,int y,int w,int h,u32 c){
  if(x<0){w+=x;x=0;}if(y<0){h+=y;y=0;}
- if(x+w>WIDTH)w=WIDTH-x;if(y+h>HEIGHT)h=HEIGHT-y;
+ if(x+w>WIDTH)w=WIDTH-x;
+ if(y+h>HEIGHT)h=HEIGHT-y;
  for(int xx=x;xx<x+w;xx++)for(int yy=y;yy<y+h;yy++)p[xx*s+HEIGHT-1-yy]=c;
 }
 static void disc(u32 *p,unsigned s,int x,int y,int r,u32 c){
