@@ -1,0 +1,65 @@
+name: Build and release Diamond Spiral
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y clang lld make gcc zip unzip file
+      - name: Test and build
+        run: make check && make
+      - name: Verify package
+        run: |
+          unzip -t dist/q2-zuma.zip
+          unzip -p dist/q2-zuma.zip .zuma/q2app | grep -Fx 'game=1'
+          file dist/.zuma/q2-zuma | grep -E 'ELF 32-bit LSB.*MIPS'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: q2-zuma-card-app
+          path: dist/q2-zuma.zip
+          if-no-files-found: error
+  latest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: q2-zuma-card-app
+          path: dist
+      - name: Publish latest installable ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest dist/q2-zuma.zip --clobber
+          else
+            gh release create latest dist/q2-zuma.zip --target "$GITHUB_SHA" --title "Diamond Spiral - Latest" --notes "Extract the ZIP to the Q2 microSD card root."
+          fi
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: q2-zuma-card-app
+          path: dist
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/q2-zuma.zip --verify-tag --generate-notes
