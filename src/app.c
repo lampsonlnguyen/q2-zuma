@@ -58,7 +58,8 @@ static void win_if_empty(struct app *a){
 }
 static void insert_at(struct app *a,int at,int c){
  if(a->count>=MAX_BALLS){a->phase=LOST;return;}
- if(at<0)at=0;if(at>a->count)at=a->count;
+ if(at<0)at=0;
+ if(at>a->count)at=a->count;
  for(int i=a->count;i>at;i--)a->balls[i]=a->balls[i-1];
  a->balls[at]=(unsigned char)c;a->count++;
  int lo=at,hi=at;
@@ -131,7 +132,8 @@ int app_input(struct app *a,const char *s){
   if(n==218){
    if(a->phase==READY||a->phase==WON||a->phase==LOST)begin(a);
    else if(a->phase==PAUSED)a->phase=RUNNING;
-   else shoot(a);return 1;
+   else shoot(a);
+   return 1;
   }
   /* Physical buttons forwarded by Q2 Pod: left/right as alternate aim. */
   if(n==105||n==106){a->angle=(a->angle+(n==105?31:1))%32;return 1;}
