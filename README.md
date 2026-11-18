@@ -43,3 +43,9 @@ The output is `dist/q2-zuma.zip`. CI tests the core and cross-compiles the MIPS 
 The target framebuffer is 375×320, and the renderer accounts for Q2's unusual rotated memory layout. The game is a freestanding native little-endian MIPS32 card app, not an emulator.
 
 **Status:** CI build and unit tests are necessary but not sufficient. Verify wheel direction, touch coordinate orientation, performance, and display layout on a physical Q2.
+
+## Rendering and performance update
+
+The engine now precomputes a distance-indexed path lookup, caches the complete track background per theme, and uses five tiny 21×21 original jewel sprites with pre-baked lighting. The per-frame path square roots, thick-track circle stamping, and marble disc calculations have been removed. The 375×320 framebuffer must still be transferred every rendered frame.
+
+The gameplay is an original Zuma-style shooter, **not a literal port of Zaz**: Zaz's grab-and-reinsert mechanic differs from the center shooter here. Zaz is a GPLv3 reference for marble-chain game design (https://zaz.sourceforge.net/); no Zaz source or assets are included. Physical Q2 frame pacing and hardware controls still require verification.

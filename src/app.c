@@ -16,16 +16,28 @@ static int length(int x,int y){ /* integer sqrt, bounded 32-bit coordinates */
  while(bit){if(n>=r+bit){n-=r+bit;r=(r>>1)+bit;}else r>>=1;bit>>=2;}
  return (int)r;
 }
-static int total_path(void){int sum=0;for(int i=0;i<SEGMENTS;i++)sum+=length(track[i+1].x-track[i].x,track[i+1].y-track[i].y);return sum;}
-static Point position(int distance){
- if(distance<=0)return track[0];
- for(int i=0;i<SEGMENTS;i++){
-  int dx=track[i+1].x-track[i].x,dy=track[i+1].y-track[i].y;
-  int len=length(dx,dy);
-  if(distance<=len){Point p={track[i].x+dx*distance/len,track[i].y+dy*distance/len};return p;}
-  distance-=len;
+/* Cache all path coordinates once. No sqrt/divisions per marble per frame. */
+enum { PATH_CAP=4096 };
+static Point path_cache[PATH_CAP];
+static int path_count;
+static void init_path(void){
+ if(path_count)return;
+ for(int s=0;s<SEGMENTS;s++){
+  Point p=track[s],q=track[s+1];
+  int dx=q.x-p.x,dy=q.y-p.y,steps=length(dx,dy);
+  for(int k=0;k<steps&&path_count<PATH_CAP;k++){
+   Point pt={p.x+dx*k/steps,p.y+dy*k/steps};
+   path_cache[path_count++]=pt;
+  }
  }
- return track[SEGMENTS];
+ if(path_count<PATH_CAP)path_cache[path_count++]=track[SEGMENTS];
+}
+static int total_path(void){init_path();return path_count-1;}
+static Point position(int distance){
+ init_path();
+ if(distance<0)distance=0;
+ if(distance>=path_count)distance=path_count-1;
+ return path_cache[distance];
 }
 static unsigned rnd(struct app *a){unsigned x=a->rng;x^=x<<13;x^=x>>17;x^=x<<5;a->rng=x;return x;}
 static int color(struct app *a){return (int)(rnd(a)%5u);}
@@ -36,6 +48,7 @@ static void begin(struct app *a){
  a->angle=0;a->wheel=0;
  for(int i=0;i<a->count;i++)a->balls[i]=(unsigned char)color(a);
  a->loaded=color(a);a->next_color=color(a);
+ init_path();
 }
 int app_init(struct app *a,unsigned long best){
  *a=(struct app){0};a->rng=0x712ab47cu;a->best=best<10000000u?(unsigned)best:0;a->phase=READY;return 1;
@@ -168,20 +181,40 @@ static const unsigned char font[36][7]={
 {6,8,16,30,17,17,14},{31,1,2,4,8,8,8},{14,17,17,14,17,17,14},
 {14,17,17,15,1,2,12}
 };
-static const u32 palette[5]={0xfffa654fu,0xff49b7e5u,0xfff2cf61u,0xff72c985u,0xffb38beb};
+/* Cached RGB artwork: original tiny jewel sprites generated at build time.
+ * Background and track are rendered once per theme, rather than every frame. */
+#include "sprites.h"
+static u32 backdrop[WIDTH*HEIGHT];
+static int backdrop_theme=-1;
 static void pixel(u32 *p,unsigned stride,int x,int y,u32 c){
  if(x>=0&&x<WIDTH&&y>=0&&y<HEIGHT)p[x*stride+HEIGHT-1-y]=c;
 }
 static void rect(u32 *p,unsigned s,int x,int y,int w,int h,u32 c){
- for(int yy=y;yy<y+h;yy++)for(int xx=x;xx<x+w;xx++)pixel(p,s,xx,yy,c);
+ if(x<0){w+=x;x=0;}if(y<0){h+=y;y=0;}
+ if(x+w>WIDTH)w=WIDTH-x;if(y+h>HEIGHT)h=HEIGHT-y;
+ for(int xx=x;xx<x+w;xx++)for(int yy=y;yy<y+h;yy++)p[xx*s+HEIGHT-1-yy]=c;
 }
 static void disc(u32 *p,unsigned s,int x,int y,int r,u32 c){
- for(int dy=-r;dy<=r;dy++)for(int dx=-r;dx<=r;dx++)
-  if(dx*dx+dy*dy<=r*r)pixel(p,s,x+dx,y+dy,c);
+ int rr=r*r;
+ for(int dx=-r;dx<=r;dx++)for(int dy=-r;dy<=r;dy++)
+  if(dx*dx+dy*dy<=rr)pixel(p,s,x+dx,y+dy,c);
 }
 static void line(u32 *p,unsigned s,int x,int y,int xx,int yy,int r,u32 c){
  int steps=absi(xx-x)>absi(yy-y)?absi(xx-x):absi(yy-y);
  for(int k=0;k<=steps;k++)disc(p,s,x+(xx-x)*k/(steps?steps:1),y+(yy-y)*k/(steps?steps:1),r,c);
+}
+/* 21x21 transparent sprite blit: pre-shaded gemstones, no per-pixel math. */
+static void jewel(u32 *p,unsigned stride,int cx,int cy,int color){
+ if(color<0||color>=5)return;
+ const u32 *src=gem_sprites[color];
+ for(int dx=0;dx<21;dx++){
+  int x=cx+dx-10;if(x<0||x>=WIDTH)continue;
+  u32 *dest=p+x*stride;
+  for(int dy=0;dy<21;dy++){
+   int y=cy+dy-10;
+   if(y>=0&&y<HEIGHT){u32 v=src[dy*21+dx];if(v)dest[HEIGHT-1-y]=v;}
+  }
+ }
 }
 static void label(u32 *p,unsigned st,const char *s,int y,int z,u32 c){
  int n=0;while(s[n])n++;int x=(WIDTH-(n*6-1)*z)/2;
@@ -198,35 +231,61 @@ static void number_label(u32 *p,unsigned st,unsigned number,int y,u32 c){
  char out[12];for(int j=0;j<k;j++)out[j]=str[k-1-j];out[k]=0;
  label(p,st,out,y,2,c);
 }
+static void prepare_background(int dark){
+ if(backdrop_theme==dark)return;
+ backdrop_theme=dark;
+ u32 bg=dark?0xff0d1422u:0xffe9e4d9u;
+ u32 border=dark?0xff273752u:0xffc0b6a5u;
+ u32 rail=dark?0xff445775u:0xff948a7au;
+ rect(backdrop,HEIGHT,0,0,WIDTH,HEIGHT,bg);
+ /* Quiet decorative lines and tiny stars are drawn only once. */
+ for(int x=25;x<WIDTH-20;x+=41)
+  for(int y=58;y<HEIGHT-18;y+=43)
+   disc(backdrop,HEIGHT,x,y,1,dark?0xff222f44u:0xffd5ccbeu);
+ init_path();
+ /* Use the path samples to stamp the track once, avoiding repeated lines. */
+ for(int i=0;i<path_count;i+=3)disc(backdrop,HEIGHT,path_cache[i].x,path_cache[i].y,13,border);
+ for(int i=0;i<path_count;i+=2)disc(backdrop,HEIGHT,path_cache[i].x,path_cache[i].y,8,rail);
+ for(int i=0;i<path_count;i+=3)disc(backdrop,HEIGHT,path_cache[i].x,path_cache[i].y,5,dark?0xff263449u:0xffafa596u);
+ Point exit=track[SEGMENTS];
+ disc(backdrop,HEIGHT,exit.x,exit.y,19,dark?0xff10121bu:0xff5c4b4bu);
+ disc(backdrop,HEIGHT,exit.x,exit.y,14,0xffb38a51u);
+ disc(backdrop,HEIGHT,exit.x,exit.y,10,0xff3e2b36u);
+ disc(backdrop,HEIGHT,exit.x,exit.y,5,0xffd9b773u);
+ /* Original diamond insignia around the shooter. */
+ disc(backdrop,HEIGHT,187,166,26,dark?0xff35425cu:0xffb0a69bu);
+ disc(backdrop,HEIGHT,187,166,22,0xff8b6842u);
+ disc(backdrop,HEIGHT,187,166,18,dark?0xff19253du:0xffe5d4b0u);
+}
 void app_frame(struct app *a,u32 *p,unsigned stride,unsigned ms){
  step(a,ms);
- u32 bg=a->dark_mode?0xff111927u:0xffefece2u;
+ prepare_background(a->dark_mode);
+ /* Rectangular copy is far cheaper than 1000s of radius and sqrt tests. */
+ for(int x=0;x<WIDTH;x++)
+  for(int y=0;y<HEIGHT;y++)p[x*stride+y]=backdrop[x*HEIGHT+y];
  u32 fg=a->dark_mode?0xfff4f2e9u:0xff29334au;
- rect(p,stride,0,0,WIDTH,HEIGHT,bg);
  label(p,stride,"DIAMOND SPIRAL",11,2,fg);
  number_label(p,stride,a->score,36,fg);
- for(int i=0;i<SEGMENTS;i++)line(p,stride,track[i].x,track[i].y,track[i+1].x,track[i+1].y,14,a->dark_mode?0xff263448u:0xffc2beb2u);
- for(int i=0;i<SEGMENTS;i++)line(p,stride,track[i].x,track[i].y,track[i+1].x,track[i+1].y,1,a->dark_mode?0xff667082u:0xff918b80u);
- Point exit=track[SEGMENTS];disc(p,stride,exit.x,exit.y,17,0xff16141du);disc(p,stride,exit.x,exit.y,10,0xffa77f55u);
  if(a->phase!=READY){
   for(int i=a->count-1;i>=0;i--){
-   Point pos=position(a->head-i*SPACING);int c=a->balls[i];
-   disc(p,stride,pos.x,pos.y,10,0xff242330u);
-   disc(p,stride,pos.x,pos.y,8,palette[c]);
-   disc(p,stride,pos.x-3,pos.y-3,3,0xfff4ede0u);
+   Point pos=position(a->head-i*SPACING);
+   jewel(p,stride,pos.x,pos.y,a->balls[i]);
   }
  }
- /* Marble launcher in center, with wheel-rotated aiming line. */
- line(p,stride,187,166,187+aim[a->angle].x*37/256,166+aim[a->angle].y*37/256,3,0xffc99b61u);
- disc(p,stride,187,166,17,0xff232f48u);disc(p,stride,187,166,13,0xffd8a65cu);
- disc(p,stride,187,166,9,palette[a->loaded]);disc(p,stride,187,166,3,0xffffeee0u);
- disc(p,stride,213,182,8,0xff2d3646u);disc(p,stride,213,182,6,palette[a->next_color]);
- if(a->shot_active){disc(p,stride,a->shot_x/256,a->shot_y/256,10,0xff252836u);disc(p,stride,a->shot_x/256,a->shot_y/256,8,palette[a->shot_color]);}
- if(a->flash)disc(p,stride,187,166,18,0xfff4cf73u);
- if(a->phase==READY){rect(p,stride,40,272,295,31,bg);label(p,stride,"CENTER TO START",278,2,fg);}
- else if(a->phase==PAUSED){rect(p,stride,47,268,281,39,bg);label(p,stride,"PAUSED",273,2,fg);label(p,stride,"CENTER RESUME",291,1,fg);}
- else if(a->phase==LOST){rect(p,stride,40,268,295,39,bg);label(p,stride,"GAME OVER",275,2,fg);label(p,stride,"CENTER RETRY",294,1,fg);}
- else if(a->phase==WON){rect(p,stride,40,268,295,39,bg);label(p,stride,"CHAIN CLEARED",275,2,fg);label(p,stride,"CENTER AGAIN",294,1,fg);}
+ /* Shooter: compact brass ring, an inset diamond and an aim laser. */
+ line(p,stride,187,166,187+aim[a->angle].x*37/256,166+aim[a->angle].y*37/256,2,0xffeecb7cu);
+ disc(p,stride,187,166,18,0xff141e31u);
+ disc(p,stride,187,166,14,0xffc9a364u);
+ disc(p,stride,187,166,11,0xff26334du);
+ jewel(p,stride,187,166,a->loaded);
+ disc(p,stride,213,182,10,0xff26334du);
+ jewel(p,stride,213,182,a->next_color);
+ if(a->shot_active)jewel(p,stride,a->shot_x/256,a->shot_y/256,a->shot_color);
+ if(a->flash)disc(p,stride,187,166,2,0xfffff5d5u);
+ if(a->phase==READY){rect(p,stride,40,272,295,31,a->dark_mode?0xff0d1422u:0xffe9e4d9u);label(p,stride,"CENTER TO START",278,2,fg);}
+ else if(a->phase==PAUSED){rect(p,stride,47,268,281,39,a->dark_mode?0xff0d1422u:0xffe9e4d9u);label(p,stride,"PAUSED",273,2,fg);label(p,stride,"CENTER RESUME",291,1,fg);}
+ else if(a->phase==LOST){rect(p,stride,40,268,295,39,a->dark_mode?0xff0d1422u:0xffe9e4d9u);label(p,stride,"GAME OVER",275,2,fg);label(p,stride,"CENTER RETRY",294,1,fg);}
+ else if(a->phase==WON){rect(p,stride,40,268,295,39,a->dark_mode?0xff0d1422u:0xffe9e4d9u);label(p,stride,"CHAIN CLEARED",275,2,fg);label(p,stride,"CENTER AGAIN",294,1,fg);}
  else label(p,stride,"WHEEL AIM CENTER FIRE",301,1,fg);
 }
 int app_animated(const struct app *a){return a->phase==RUNNING||a->flash!=0;}
